@@ -358,8 +358,7 @@ let rec nspaces n =
   | Invalid_argument _ -> str ""
 
 let rec pp_expr b n (tvs: identifier list) (env: env) (t: ml_ast') : 'a =
-  (if b then nspaces n else str "") ++
-  (try
+    (if b then nspaces n else str "") ++
     match t with
     | MLrel' (i, ts) ->
 	let id = get_db_name i env in
@@ -417,10 +416,6 @@ let rec pp_expr b n (tvs: identifier list) (env: env) (t: ml_ast') : 'a =
     | MLmagic' (a, ty) ->
 	str "(" ++ pp_expr false 0 tvs env a ++ str ").asInstanceOf[" ++ pp_type tvs ty ++ str"]"
     | MLaxiom' -> str "() // AXIOM TO BE REALIZED" ++ fnl()
-  with Failure s -> 
-    print_string (s ^ " when pp_expr : ");
-    print_ast' t;
-    assert false)
 
 and pp_case n tvs env (ids,p,t) =
   let (ids, env') = push_vars (List.rev_map id_of_mlid ids) env in
