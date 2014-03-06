@@ -103,7 +103,7 @@ let rec subst_mlt_one s = function
 let rec subst_mlt ss ty = 
   match ss with
   | [] -> ty
-  | h :: ss' -> subst_mlt ss' (subst_mlt_aux h ty)
+  | h :: ss' -> subst_mlt ss' (subst_mlt_one h ty)
 
 let subst_mlt_all ss ty = subst_mlt (List.flatten ss) ty
 
