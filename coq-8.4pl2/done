@@ -1,0 +1,119 @@
+Dind Coq.Init.Datatypes.nat{
+ind_kind: Standard
+ind_nparams: 0
+ind_packets: 
+  {
+  ip_typename: nat  ip_consnames: O,S  ip_logical: false  ip_sign:   ip_vars:   
+  ip_types:  | (Tglob (inductive Coq.Init.Datatypes.nat {0})[])  }
+ind_equiv: NoEquiv
+}
+
+Dfix 
+(constant Coq.Init.Peano.plus)
+(Tglob (inductive Coq.Init.Datatypes.nat {0})[]) -> (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) -> (Tglob (inductive Coq.Init.Datatypes.nat {0})[])
+  (MLlam Id n -> 
+    (MLlam Id m -> 
+      (MLcase (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : 
+        (MLrel 2)      with 
+      |  : (Pusual (constructorCoq.Init.Datatypes.nat {0,1})) ->         (MLrel 1)
+      | Id p : (Pusual (constructorCoq.Init.Datatypes.nat {0,2})) ->
+         (MLcons (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : (constructorCoq.Init.Datatypes.nat {0,2})[
+          (MLapp 
+            (MLglob (constant Coq.Init.Peano.plus))
+            (MLrel 1)
+            (MLrel 2))]))))
+
+let rec plus n m =
+  match n with
+  | O -> m
+  | S p -> S (plus p m)
+
+Dind Coq.Init.Specif.sig{
+ind_kind: Singleton
+ind_nparams: 2
+ind_packets: 
+  {
+  ip_typename: sig  ip_consnames: exist  ip_logical: false  ip_sign: Keep,Kill-Kother  ip_vars: A  
+  ip_types: (Tvar 1)  }
+ind_equiv: NoEquiv
+}
+
+type 'a sig0 =
+  'a
+  (* singleton inductive, whose constructor was exist *)
+
+Dind Coq.Init.Datatypes.list{
+ind_kind: Standard
+ind_nparams: 1
+ind_packets: 
+  {
+  ip_typename: list  ip_consnames: nil,cons  ip_logical: false  ip_sign: Keep  ip_vars: A  ip_types:  | (Tvar 1),(Tglob (inductive Coq.Init.Datatypes.list {0})[(Tvar 1)])  }
+ind_equiv: NoEquiv
+}
+Dterm (constant Coq.Lists.List.hd) : (Tvar 1) -> (Tglob (inductive Coq.Init.Datatypes.list {0})[(Tvar 1)]) -> (Tvar 1)
+:= 
+  (MLlam Id default -> 
+    (MLlam Id l -> 
+      (MLcase (Tglob (inductive Coq.Init.Datatypes.list {0})[(Tvar' 1)]) : 
+        (MLrel 1)      with 
+      |  : (Pusual (constructorCoq.Init.Datatypes.list {0,1})) ->         (MLrel 2)
+      | Id x,Id l : (Pusual (constructorCoq.Init.Datatypes.list {0,2})) ->         (MLrel 2))))
+
+let hd default = function
+| Nil -> default
+| Cons (x, l0) -> x
+
+Dterm (constant Top.te) : (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) -> (Tglob (inductive Coq.Init.Datatypes.nat {0})[])
+:= 
+  (MLlam Id n -> 
+    (MLapp 
+      (MLglob (constant Coq.Init.Peano.plus))
+      (MLrel 1)
+      (MLcons (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : (constructorCoq.Init.Datatypes.nat {0,2})[
+        (MLcons (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : (constructorCoq.Init.Datatypes.nat {0,1})[
+])])))
+
+Dfix 
+(constant Coq.Init.Peano.mult)
+(Tglob (inductive Coq.Init.Datatypes.nat {0})[]) -> (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) -> (Tglob (inductive Coq.Init.Datatypes.nat {0})[])
+  (MLlam Id n -> 
+    (MLlam Id m -> 
+      (MLcase (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : 
+        (MLrel 2)      with 
+      |  : (Pusual (constructorCoq.Init.Datatypes.nat {0,1})) ->
+         (MLcons (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : (constructorCoq.Init.Datatypes.nat {0,1})[
+])
+      | Id p : (Pusual (constructorCoq.Init.Datatypes.nat {0,2})) ->
+         (MLapp 
+          (MLglob (constant Coq.Init.Peano.plus))
+          (MLrel 2)
+          (MLapp 
+            (MLglob (constant Coq.Init.Peano.mult))
+            (MLrel 1)
+            (MLrel 2))))))
+
+Dterm (constant Top.te2) : (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) -> (Tglob (inductive Coq.Init.Datatypes.nat {0})[])
+:= 
+  (MLlam Id n -> 
+    (MLletin Id m := 
+      (MLapp 
+        (MLglob (constant Coq.Init.Peano.plus))
+        (MLrel 1)
+        (MLcons (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : (constructorCoq.Init.Datatypes.nat {0,2})[
+          (MLcons (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : (constructorCoq.Init.Datatypes.nat {0,1})[
+])]))    in 
+      (MLletin Id l := 
+        (MLapp 
+          (MLglob (constant Coq.Init.Peano.plus))
+          (MLrel 1)
+          (MLrel 2))      in 
+        (MLapp 
+          (MLglob (constant Coq.Init.Peano.mult))
+          (MLrel 1)
+          (MLcons (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : (constructorCoq.Init.Datatypes.nat {0,2})[
+            (MLcons (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : (constructorCoq.Init.Datatypes.nat {0,2})[
+              (MLcons (Tglob (inductive Coq.Init.Datatypes.nat {0})[]) : (constructorCoq.Init.Datatypes.nat {0,1})[
+])])])))))
+
+let te2 n =
+  let m = plus n (S O) in let l = plus m n in mult l (S (S O))
