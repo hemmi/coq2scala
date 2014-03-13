@@ -68,6 +68,12 @@ let rec new_meta_list n =
   if n<=0 then []
   else new_meta() :: (new_meta_list (n-1))
 
+let rec var'2var = function
+  | Tvar' i -> Tvar i
+  | Tarr (a,b) -> Tarr (var'2var a, var'2var b)
+  | Tglob (r,l) -> Tglob (r, List.map var'2var l)
+  | a -> a
+
 let generalization t =
   let c = ref 0 in
   let map = ref (Intmap.empty : int Intmap.t) in
@@ -272,8 +278,8 @@ and infer_ml_branch ty c tb targs bs =
   in infer_ml_branch_iter [] [] bs
 
 let infer_ml mlt mle = 
-  let (s, mle') = infer_ml_iter [] mlt mle in
-  ast_tmap' (subst_mlt s) mle'
+  let (s, mle') = infer_ml_iter [] (var2var' mlt) mle in
+  ast_tmap' (fun ty -> subst_mlt s (var'2var ty)) mle'
 
 (* ---------------------------------------------------------------------------------------- *)
 let (!%) = Printf.sprintf
