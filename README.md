@@ -5,3 +5,5 @@ http://proofcafe.org/wiki/Coq2Scala
 
 このリポジトリにあるcoq-8.4pl2は既にパッチ適用済みのコードです。
 
+gmail: churulinko
+
