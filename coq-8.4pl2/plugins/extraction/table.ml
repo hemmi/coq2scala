@@ -536,7 +536,7 @@ let _ = declare_int_option
 
 type lang = Ocaml | Haskell | Scheme | Scala
 
-let lang_ref = ref Ocaml
+let lang_ref = ref Scala 
 
 let lang () = !lang_ref
 

@@ -48,6 +48,17 @@ let collect_lams' =
     | x           -> acc,x
   in collect []
 
+(** val combine : 'a1 list -> 'a2 list -> ('a1 * 'a2) list **)
+
+let rec combine l l' =
+  match l with
+  | [] -> []
+  | x :: tl ->
+    (match l' with
+     | [] -> []
+     | y :: tl' -> (x, y) :: (combine tl tl'))
+
+
 let free_type_vars typ =
   let module S = Set.Make(struct type t = int let compare = compare end) in
   let rec iter = function
@@ -63,43 +74,6 @@ let free_type_vars typ =
     | Taxiom -> S.empty
   in
   S.elements (iter typ)
-
-let rec new_meta_list n =
-  if n<=0 then []
-  else new_meta() :: (new_meta_list (n-1))
-
-let rec var'2var = function
-  | Tvar' i -> Tvar i
-  | Tarr (a,b) -> Tarr (var'2var a, var'2var b)
-  | Tglob (r,l) -> Tglob (r, List.map var'2var l)
-  | a -> a
-
-let generalization t =
-  let c = ref 0 in
-  let map = ref (Intmap.empty : int Intmap.t) in
-  let add_new i = incr c; map := Intmap.add i !c !map; !c in
-  let rec meta2var t = match t with
-    | Tmeta ({id=i}) ->
-       (try Tvar (Intmap.find i !map)
-        with Not_found ->
-          Tvar (add_new i))
-    | Tarr (t1,t2) -> Tarr (meta2var t1, meta2var t2)
-    | Tglob (r,l) -> Tglob (r, List.map meta2var l)
-    | t -> t
-  in meta2var t
-
-let rec ast_tmap' f = function
-  | MLrel' (x, ts) -> MLrel' (x, List.map f ts)
-  | MLapp' (a, b) -> MLapp' (ast_tmap' f a, List.map (ast_tmap' f) b)
-  | MLlam' (x, t, a) -> MLlam' (x, f t, ast_tmap' f a)
-  | MLglob' (r, ts) -> MLglob' (r, List.map f ts)
-  | MLletin' (x, (i,t), a, b) -> MLletin' (x, (i,f t), ast_tmap' f a, ast_tmap' f b)
-  | MLcons' (t, x, bs) -> MLcons' (f t, x, List.map (ast_tmap' f) bs)
-  | MLtuple' bs -> MLtuple' (List.map (ast_tmap' f) bs)
-  | MLcase' (t, a, bs) -> MLcase' (f t, ast_tmap' f a, Array.map (fun (ids,p,b) -> (ids,p,ast_tmap' f b)) bs)
-  | MLfix' (i, idts, bs) -> MLfix' (i, Array.map (fun (id,t) -> (id, f t)) idts, Array.map (ast_tmap' f) bs)
-  | MLmagic' (a, t) -> MLmagic' (ast_tmap' f a, f t)
-  | t -> t
 
 let rec subst_mlt_one s = function
   | Tarr (t1, t2) -> Tarr (subst_mlt_one s t1, subst_mlt_one s t2)
@@ -145,140 +119,598 @@ let rec elim_singleton = function
       | Some t -> elim_singleton (type_subst_list ts' t))
   | t -> t
 
-let unify t1 t2 = 
-  let rec unify_iter = function
+let rec unify = function
   | [] -> []
   | (a, b) :: cs' ->
      match elim_singleton a, elim_singleton b with
-     | Tmeta m, Tmeta m' when m.id = m'.id -> unify_iter cs'
+     | Tmeta m, Tmeta m' when m.id = m'.id -> unify cs'
      | Tmeta m, t | t, Tmeta m ->
          let s = (m.id, t) in
-         s :: unify_iter (subst_constrs [s] cs')
+         s :: unify (subst_constrs [s] cs')
      | Tarr(a, b), Tarr(a', b') ->
-         unify_iter ((a, a') :: (b, b') :: cs')
+         unify ((a, a') :: (b, b') :: cs')
      | Tglob (r,l), Tglob (r',l') when r = r' ->
-         unify_iter ((List.combine l l') @ cs')
-     | Tdummy _, Tdummy _ | Tunknown, Tunknown | Taxiom, Taxiom -> unify_iter cs'
+         unify ((combine l l') @ cs')
+     | Tdummy _, Tdummy _ | Tunknown, Tunknown | Taxiom, Taxiom -> unify cs'
      | Tvar i, Tvar j | Tvar i, Tvar' j | Tvar' i, Tvar j | Tvar' i, Tvar' j -> 
-         if i=j then unify_iter cs' 
+         if i=j then unify cs' 
          else assert false
      | t, u -> assert false
-  in unify_iter [(t1, t2)]
 
 let rec type_of_ref r = function
-  | [] -> assert false
-  | (Sval (r', ty)) :: tl when eq_gr r r'-> ty
+  | [] -> None
+  | (Sval (r', ty)) :: tl when eq_gr r r'-> Some ty
   | _ :: tl -> type_of_ref r tl
 
-let rec mind_of_cons mi i = function
-  | [] -> assert false
-  | (Sind (mi', mind)) :: _ when eq_mind mi mi' -> mind
-  | _ :: tl -> mind_of_cons mi i tl
+let rec mind_of_cons mi = function
+  | [] -> None
+  | (Sind (mi', mind)) :: _ when eq_mind mi mi' -> Some mind
+  | _ :: tl -> mind_of_cons mi tl
 
-let type_of_cons mi i j targs ev = 
-  List.map (type_subst_list targs) (mind_of_cons mi i ev).ind_packets.(i).ip_types.(j-1)
+let type_of_cons mind i j = 
+  mind.ind_packets.(i).ip_types.(j-1)
 
-let rec infer_ml_iter c mlt = function
-  | MLrel n -> 
-     let (_,ty) = List.nth c (n-1) in
-     let mty = new_meta_list (type_maxvar ty) in
-     let tyr = type_subst_list mty ty in
-     let s' = unify tyr mlt in
-     let tvars = List.map (subst_mlt s') mty in
-     (s', MLrel' (n, tvars))
-  | MLapp (a, bs) -> 
-     let tybs = new_meta_list (List.length bs) in
-     let tya = type_recomp (tybs, mlt) in
-     let (sa, a') = infer_ml_iter c tya a in
-     let (sb, bs') = infer_ml_list c (List.map2 (fun t -> fun u -> (t, subst_mlt sa u)) bs tybs) in
-     let s = sa @ (List.flatten sb) in
-     (s, MLapp' (a', bs'))
-  | MLlam (x, a) -> 
-     let tx = new_meta() in let ta = new_meta() in
-     let s = unify mlt (Tarr (tx,ta)) in
-     let tx' = subst_mlt s tx in
-     let ta' = subst_mlt s ta in
-     let (sa, a') = infer_ml_iter (add_var (x,tx') c) ta' a in
-     (s @ sa, MLlam' (x, subst_mlt sa tx', a'))
-  | MLletin (x, a, b) ->
-     let ta = new_meta() in
-     let (sa, a') = infer_ml_iter c ta a in
-     let ta' = generalization (subst_mlt sa ta) in
-     let i = List.length (free_type_vars ta') in
-     let (sb, b') = infer_ml_iter (add_var (x,ta') c) (subst_mlt sa mlt) b in
-     (sa @ sb, MLletin' (x, (i,ta'), a', b'))
-  | MLglob r ->
-     let ty = type_of_ref r !refenv in
-     let mty = new_meta_list (type_maxvar ty) in
-     let tyr = type_subst_list mty ty in
-     let s' = unify tyr mlt in
-     let tvars = List.map (subst_mlt s') mty in
-     (s', MLglob' (r, tvars))
-  | MLcons (ty, (ConstructRef ((mi, i), j) as cr), bs) -> 
-     let mind = mind_of_cons mi i !refenv in
-     let targs = new_meta_list (mind.ind_nparams) in
-     let cargs_ty = type_of_cons mi i j targs !refenv in
-     let (sb, bs') = infer_ml_list c (List.combine bs cargs_ty) in
-     (List.flatten sb, MLcons' (ty, cr, bs'))
-  | MLcons _ -> assert false
-  | MLtuple _ -> assert false
-  | MLcase (_, a, bs) -> 
-     let ta = new_meta() in
-     let (sa, a') = infer_ml_iter c ta a in
-     let ta' = subst_mlt sa ta in
-     (match ta' with
-     | Tglob (_, targs) ->
-         let (sb, bs') = infer_ml_branch ta' c mlt targs (Array.to_list bs) in
-         let s = sa @ sb in
-         (s, MLcase' (subst_mlt s ta, a', bs'))
-     | _ -> assert false)
-  | MLcase _ -> assert false
-  | MLfix (i, ids, defas) -> 
-     let idl = Array.to_list ids in
-     let defs = Array.to_list defas in
-     let l = List.length defs in
-     let tys = new_meta_list l in
-     let tmp_tys = List.map (fun ty -> type_recomp (tys,ty)) tys in
-     let mids = List.rev (List.map (fun i -> Id i) idl) in
-     let defs' = List.map (named_lams mids) defs in
-     let (ss, _) = infer_ml_list c (List.combine defs' tmp_tys) in
-     let tys' = List.map2 (fun si -> fun tyi -> generalization (subst_mlt si tyi)) ss tys in
-     let c' = List.rev_append (List.map2 (fun id -> fun tyi -> (Id id, tyi)) idl tys') c in
-     let (ss', defs'') = infer_ml_list c' (List.combine defs tys') in
-     let ss'' = List.flatten ss' in
-     let si = unify (subst_mlt ss'' (List.nth tys' i)) mlt in
-     (ss'' @ si, MLfix' (i, Array.of_list (List.combine idl tys'), Array.of_list defs''))
-  | MLexn st -> ([], MLexn' st)
-  | MLdummy -> ([], MLdummy')
-  | MLaxiom -> ([], MLaxiom')
-  | MLmagic a -> 
-     let (sa, a') = infer_ml_iter c (new_meta()) a in
-     (sa, MLmagic' (a', mlt))
+(* ---------------------------------------------------------------------------------------- *)
 
-and infer_ml_list c mlet = 
-  let rec infer_ml_list_iter ss ret = function
-  | [] -> (List.rev ss, List.rev ret)
-  | (a, ty) :: tl -> 
-     (let (sa, a') = infer_ml_iter c ty a in
-      infer_ml_list_iter (sa :: ss) (a' :: ret) tl)
-  in infer_ml_list_iter [] [] mlet
+type __ = Obj.t
+let __ = let rec f _ = Obj.repr f in Obj.repr f
 
-and infer_ml_branch ty c tb targs bs =
-  let rec infer_ml_branch_iter s ret = function
-  | [] -> (s, Array.of_list (List.rev ret))
-  | (ids, p, b) :: bs' ->
-      let c' = match p with
-               | Prel 1 -> ((List.hd ids), ty) :: c
-               | Pusual (ConstructRef ((mi, i), j)) ->
-                   List.rev_append (List.map2 (fun id -> fun tyi -> (id, tyi)) ids (type_of_cons mi i j targs !refenv)) c
-               | Pwild -> c
-               | _ -> assert false in
-      let (sb, b') = infer_ml_iter c' (subst_mlt s tb) b in
-      infer_ml_branch_iter (s @ sb) ((ids, p, b') :: ret) bs'
-  in infer_ml_branch_iter [] [] bs
+(** val fst : ('a1 * 'a2) -> 'a1 **)
+
+let fst = function
+| (x, y) -> x
+
+(** val length : 'a1 list -> int **)
+
+let rec length = function
+| [] -> 0
+| y :: l' -> Pervasives.succ (length l')
+
+(** val app : 'a1 list -> 'a1 list -> 'a1 list **)
+
+let rec app l m =
+  match l with
+  | [] -> m
+  | a :: l1 -> a :: (app l1 m)
+
+type 'a sig0 =
+  'a
+  (* singleton inductive, whose constructor was exist *)
+
+(** val pred : int -> int **)
+
+let pred = fun n -> Pervasives.max 0 (n-1)
+
+(** val plus : int -> int -> int **)
+
+let rec plus = (+)
+
+(** val nth : int -> 'a1 list -> 'a1 -> 'a1 **)
+
+let rec nth n l default =
+  (fun fO fS n -> if n=0 then fO () else fS (n-1))
+    (fun _ ->
+    match l with
+    | [] -> default
+    | x :: l' -> x)
+    (fun m ->
+    match l with
+    | [] -> default
+    | x :: t -> nth m t default)
+    n
+
+(** val map : ('a1 -> 'a2) -> 'a1 list -> 'a2 list **)
+
+let rec map f = function
+| [] -> []
+| a :: t -> (f a) :: (map f t)
+
+(** val fold_right : ('a2 -> 'a1 -> 'a1) -> 'a1 -> 'a2 list -> 'a1 **)
+
+let rec fold_right f a0 = function
+| [] -> a0
+| b :: t -> f b (fold_right f a0 t)
+
+type 'a set = 'a list
+
+(** val empty_set : 'a1 set **)
+
+let empty_set =
+  []
+
+(** val set_add : ('a1 -> 'a1 -> bool) -> 'a1 -> 'a1 set -> 'a1 set **)
+
+let rec set_add aeq_dec a = function
+| [] -> a :: []
+| a1 :: x1 -> if aeq_dec a a1 then a1 :: x1 else a1 :: (set_add aeq_dec a x1)
+
+(** val set_mem : ('a1 -> 'a1 -> bool) -> 'a1 -> 'a1 set -> bool **)
+
+let rec set_mem aeq_dec a = function
+| [] -> false
+| a1 :: x1 -> if aeq_dec a a1 then true else set_mem aeq_dec a x1
+
+(** val set_union : ('a1 -> 'a1 -> bool) -> 'a1 set -> 'a1 set -> 'a1 set **)
+
+let rec set_union aeq_dec x = function
+| [] -> x
+| a1 :: y1 -> set_add aeq_dec a1 (set_union aeq_dec x y1)
+
+(** val set_diff : ('a1 -> 'a1 -> bool) -> 'a1 set -> 'a1 set -> 'a1 set **)
+
+let rec set_diff aeq_dec x y =
+  match x with
+  | [] -> []
+  | a1 :: x1 ->
+    if set_mem aeq_dec a1 y
+    then set_diff aeq_dec x1 y
+    else set_add aeq_dec a1 (set_diff aeq_dec x1 y)
+
+(** val ind_nparams : ml_ind -> int **)
+
+let ind_nparams x = x.ind_nparams
+
+(** val mk_meta : int -> ml_type **)
+
+let mk_meta m =
+  Tmeta {id=m; contents=None}
+
+(** val mk_meta_list : int list -> ml_type list **)
+
+let mk_meta_list ms =
+  map mk_meta ms
+
+(** val get_meta : ml_meta -> int **)
+
+let get_meta m =
+  m
+
+(** val beq_id : identifier -> identifier -> bool **)
+
+let beq_id =
+  (=)
+
+(** val beq_kn : kernel_name -> kernel_name -> bool **)
+
+let beq_kn =
+  beq_id
+
+(** val beq_var : variable -> variable -> bool **)
+
+let beq_var =
+  beq_id
+
+(** val beq_const : constant -> constant -> bool **)
+
+let beq_const =
+  beq_kn
+
+(** val beq_mind : mutual_inductive -> mutual_inductive -> bool **)
+
+let beq_mind =
+  beq_kn
+
+(** val beq_ind : inductive -> inductive -> bool **)
+
+let beq_ind i1 i2 =
+  let (mi1, n1) = i1 in
+  let (mi2, n2) = i2 in (&&) (beq_mind mi1 mi2) ((=) n1 n2)
+
+(** val beq_construct : constructor -> constructor -> bool **)
+
+let beq_construct c1 c2 =
+  let (i1, n1) = c1 in let (i2, n2) = c2 in (&&) (beq_ind i1 i2) ((=) n1 n2)
+
+(** val beq_ref : global_reference -> global_reference -> bool **)
+
+let beq_ref gr1 gr2 =
+  match gr1 with
+  | VarRef v1 ->
+    (match gr2 with
+     | VarRef v2 -> beq_var v1 v2
+     | _ -> false)
+  | ConstRef c1 ->
+    (match gr2 with
+     | ConstRef c2 -> beq_const c1 c2
+     | _ -> false)
+  | IndRef i1 ->
+    (match gr2 with
+     | IndRef i2 -> beq_ind i1 i2
+     | _ -> false)
+  | ConstructRef c1 ->
+    (match gr2 with
+     | ConstructRef c2 -> beq_construct c1 c2
+     | _ -> false)
+
+type inf_env = ml_type list
+
+type subst = (int * ml_type) list
+
+(** val subst_env : subst -> inf_env -> inf_env **)
+
+let subst_env s e =
+  map (subst_mlt s) e
+
+(** val add_env : ml_type -> inf_env -> inf_env **)
+
+let add_env mlt e =
+  mlt :: e
+
+(** val opt_max : int option -> int option -> int option **)
+
+let opt_max o o' =
+  match o with
+  | Some n ->
+    (match o' with
+     | Some n' -> Some (Pervasives.max n n')
+     | None -> Some n)
+  | None -> o'
+
+(** val max_tyvar : ml_type -> int option **)
+
+let rec max_tyvar = function
+| Tarr (t1, t2) -> opt_max (max_tyvar t1) (max_tyvar t2)
+| Tglob (g, tys) -> fold_right opt_max None (map max_tyvar tys)
+| Tvar i -> Some i
+| _ -> None
+
+(** val free_vars : ml_type -> int set **)
+
+let rec free_vars = function
+| Tarr (t1, t2) -> set_union (=) (free_vars t1) (free_vars t2)
+| Tglob (r, ts) -> fold_right (set_union (=)) empty_set (map free_vars ts)
+| Tmeta m -> set_add (=) (get_meta m.id) empty_set
+| _ -> empty_set
+
+(** val mk_subst : int list -> int -> (int * ml_type) list **)
+
+let rec mk_subst l n =
+  match l with
+  | [] -> []
+  | h :: t -> (h, (Tvar n)) :: (mk_subst t (Pervasives.succ n))
+
+(** val gen : inf_env -> ml_type -> ml_type **)
+let gen c mlt =
+  let vs =
+    fold_right (fun a b -> set_diff (=) b a) (free_vars mlt)
+      (map free_vars c)
+  in
+  subst_mlt (mk_subst vs 0) mlt
+
+(** val instantiation : ml_type list -> ml_type -> ml_type **)
+
+let rec instantiation l ty = match ty with
+| Tarr (ty1, ty2) -> Tarr ((instantiation l ty1), (instantiation l ty2))
+| Tglob (r, tys) -> Tglob (r, (map (instantiation l) tys))
+| Tvar i -> nth (i-1) l ty
+| _ -> ty
+
+(** val inst_with_meta : int list -> ml_type -> ml_type **)
+
+let inst_with_meta l ty =
+  instantiation (mk_meta_list l) ty
+
+(** val lookup : int -> inf_env -> ml_type option **)
+
+let rec lookup n = function
+| [] -> None
+| ty :: c' ->
+  ((fun fO fS n -> if n=0 then fO () else fS (n-1))
+     (fun _ -> Some
+     ty)
+     (fun m ->
+     lookup m c')
+     n)
+
+type global_env = ml_spec list
+
+(** val type_recomp_aux : ml_type list -> ml_type -> ml_type **)
+
+let rec type_recomp_aux l t =
+  match l with
+  | [] -> t
+  | a :: b -> Tarr (a, (type_recomp_aux b t))
+
+(** val type_recomp : (ml_type list * ml_type) -> ml_type **)
+
+let type_recomp = function
+| (l, t) -> type_recomp_aux l t
+
+(** val ge : global_env **)
+(*
+let ge =
+  failwith "AXIOM TO BE REALIZED"
+*)
+(** val add_env_all : ml_type list -> ml_type list -> inf_env **)
+
+let rec add_env_all c ps = 
+  List.rev_append ps c
+
+(** val unify : (ml_type * ml_type) list -> subst **)
+(*
+let unify =
+  failwith "AXIOM TO BE REALIZED"
+*)
+(** val new_meta : int -> int * int **)
+
+let new_meta m =
+  ((plus m (Pervasives.succ 0)),
+    (plus m (Pervasives.succ (Pervasives.succ 0))))
+
+(** val new_meta_list_aux : int -> int -> int list **)
+
+let rec new_meta_list_aux l m =
+  (fun fO fS n -> if n=0 then fO () else fS (n-1))
+    (fun _ ->
+    [])
+    (fun l' ->
+    (plus m (Pervasives.succ 0)) :: (new_meta_list_aux l'
+                                      (plus m (Pervasives.succ 0))))
+    l
+
+(** val new_meta_list : int -> int -> int list * int **)
+
+let new_meta_list l m =
+  ((new_meta_list_aux l m), (plus (plus m l) (Pervasives.succ 0)))
+
+(** val infer_list :
+    (ml_ast * ml_type) list -> (ml_ast -> __ -> ml_type -> int -> inf_env ->
+    __ -> __ -> __ -> ((int * subst) * ml_ast')) -> int -> (ml_ast * ml_type)
+    list -> int -> inf_env -> ((int * subst) * (ml_ast' * ml_type) list) **)
+
+let rec infer_list etys0 f l etys m c =
+  (fun fO fS n -> if n=0 then fO () else fS (n-1))
+    (fun _ ->
+    match etys with
+    | [] -> (((Pervasives.succ m), []), [])
+    | p :: etys1 -> assert false (* absurd case *))
+    (fun n ->
+    match etys with
+    | [] -> assert false (* absurd case *)
+    | p :: x ->
+      let (e, ty) = p in
+      let s = f e __ ty m c __ __ __ in
+      let (p0, x0) = s in
+      let (m1, s1) = p0 in
+      let etys2 =
+        map (fun p1 -> let (e0, ty0) = p1 in (e0, (subst_mlt s1 ty0))) x
+      in
+      let s0 = infer_list etys0 f n etys2 m1 (subst_env s1 c) in
+      let (p1, x1) = s0 in
+      let (m2, s2) = p1 in ((m2, (app s1 s2)), ((x0, ty) :: x1)))
+    l
+
+(** val infer_branch :
+    ml_ast -> (ml_ident list * (ml_pattern * ml_ast)) array -> ml_type list
+    -> mutual_inductive -> int -> (ml_ident list * (ml_pattern * ml_ast))
+    list -> ml_type -> inf_env -> ml_type list -> int -> (ml_ast -> __ ->
+    ml_type -> int -> inf_env -> __ -> __ -> __ -> ((int * subst) * ml_ast'))
+    -> ((int * subst) * (ml_ident list * (ml_pattern * ml_ast')) list) **)
+
+let rec infer_branch z0 bs0 tys0 mi k bs ty c tvars m f =
+  match bs with
+  | [] -> (((Pervasives.succ m), []), [])
+  | y :: l ->
+    let (xs, p) = y in
+    let (p0, e) = p in
+    let c' =
+      match p0 with
+      | Prel n ->
+        ((fun fO fS n -> if n=0 then fO () else fS (n-1))
+           (fun _ ->
+           c)
+           (fun n0 ->
+           (fun fO fS n -> if n=0 then fO () else fS (n-1))
+             (fun _ ->
+             add_env (Tglob ((IndRef (mi, k)), tvars)) c)
+             (fun n1 ->
+             c)
+             n0)
+           n)
+      | Pusual g ->
+        (match g with
+         | ConstructRef c0 ->
+           let (i, j) = c0 in
+           let (mi0, k0) = i in
+           (match mind_of_cons mi0 !refenv with
+            | Some mind ->
+              add_env_all c
+                (map (instantiation tvars) (type_of_cons mind k0 j))
+            | None -> c)
+         | _ -> c)
+      | _ -> c
+    in
+    let s = f e __ ty m c' __ __ __ in
+    let (p1, x) = s in
+    let (m1, s1) = p1 in
+    let s0 =
+      infer_branch z0 bs0 tys0 mi k l (subst_mlt s1 ty) (subst_env s1 c)
+        (map (subst_mlt s1) tvars) m1 f
+    in
+    let (p2, x0) = s0 in
+    let (m2, s2) = p2 in ((m2, (app s1 s2)), ((xs, (p0, x)) :: x0))
+
+(** val infer :
+    ml_ast -> ml_type -> int -> inf_env -> ((int * subst) * ml_ast') **)
+
+let infer mle mlt curr_m c =
+  let rec f x =
+    let h = fun y -> f y in
+    (fun mlt0 curr_m0 c0 _ _ _ ->
+    match x with
+    | MLrel i ->
+      let tx = lookup (pred i) c0 in
+      (match tx with
+       | Some tx0 ->
+         let n =
+           match max_tyvar tx0 with
+           | Some n -> n
+           | None -> 0
+         in
+         let p = new_meta_list n curr_m0 in
+         let (ms, next_m) = p in
+         let u = unify ((mlt0, (inst_with_meta ms tx0)) :: []) in
+         let tvars' = map (fun m -> subst_mlt u (mk_meta m)) ms in
+         ((next_m, u), (MLrel' (i, tvars')))
+       | None -> assert false (* absurd case *))
+    | MLapp (mle1, mle2) ->
+      let l = length mle2 in
+      let p = new_meta_list l curr_m0 in
+      let (ms, next_m) = p in
+      let tya = type_recomp ((mk_meta_list ms), mlt0) in
+      let ret1 = h mle1 tya next_m c0 __ __ __ in
+      let (p0, x0) = ret1 in
+      let (m1, s1) = p0 in
+      let tybs = map (subst_mlt s1) (mk_meta_list ms) in
+      let etys = combine mle2 tybs in
+      let f0 = fun mle0 -> h mle0 in
+      let s =
+        infer_list etys (fun mle0 _ -> f0 mle0) l etys m1 (subst_env s1 c0)
+      in
+      let (p1, x1) = s in
+      let (m2, s2) = p1 in
+      ((m2, (app s1 s2)), (MLapp' (x0, (map (fun p2 -> fst p2) x1))))
+    | MLlam (x0, e) ->
+      let pa = new_meta curr_m0 in
+      let (ta, ma) = pa in
+      let pb = new_meta ma in
+      let (tb, mb) = pb in
+      let u = unify ((mlt0, (Tarr ((mk_meta ta), (mk_meta tb)))) :: []) in
+      let s =
+        h e (subst_mlt u (mk_meta tb)) mb
+          (subst_env u (add_env (mk_meta ta) c0)) __ __ __
+      in
+      let (p, x1) = s in
+      let (m', s') = p in
+      ((m', (app u s')), (MLlam' (x0, (subst_mlt (app u s') (mk_meta ta)),
+      x1)))
+    | MLletin (x0, mle1, mle2) ->
+      let p = new_meta curr_m0 in
+      let (ta, next_m) = p in
+      let s = h mle1 (mk_meta ta) next_m c0 __ __ __ in
+      let (p0, x1) = s in
+      let (m1, s1) = p0 in
+      let s0 =
+        h mle2 (subst_mlt s1 mlt0) m1
+          (add_env (gen (subst_env s1 c0) (subst_mlt s1 (mk_meta ta)))
+            (subst_env s1 c0)) __ __ __
+      in
+      let (p1, x2) = s0 in
+      let (m2, s2) = p1 in
+      let ty = subst_mlt s2 (gen (subst_env s1 c0) (subst_mlt s1 (mk_meta ta))) in
+      ((m2, (app s1 s2)), (MLletin' (x0, (length (free_vars ty), ty), x1, x2)))
+    | MLglob r ->
+      let tx = type_of_ref r !refenv in
+      (match tx with
+       | Some tx0 ->
+         let n =
+           match max_tyvar tx0 with
+           | Some n -> n
+           | None -> 0
+         in
+         let p = new_meta_list n curr_m0 in
+         let (ms, next_m) = p in
+         let u = unify ((mlt0, (inst_with_meta ms tx0)) :: []) in
+         let tvars' = map (fun m -> subst_mlt u (mk_meta m)) ms in
+         ((next_m, u), (MLglob' (r, tvars')))
+       | None -> assert false (* absurd case *))
+    | MLcons (ty, r, es) ->
+      (match r with
+       | ConstructRef c1 ->
+         let (i, x0) = c1 in
+         let (mi, i0) = i in
+         let mind = mind_of_cons mi !refenv in
+         (match mind with
+          | Some mind0 ->
+            let l = length es in
+            let p = new_meta_list mind0.ind_nparams curr_m0 in
+            let (ms, next_m) = p in
+            let tys = type_of_cons mind0 i0 x0 in
+            let etys = combine es (map (instantiation (map mk_meta ms)) tys)
+            in
+            let f0 = fun mle0 -> h mle0 in
+            let s = infer_list etys (fun mle0 _ -> f0 mle0) l etys next_m c0
+            in
+            let (p0, x1) = s in
+            let (m1, s1) = p0 in
+            let s2 = unify ((subst_mlt s1 mlt0, subst_mlt s1 (Tglob ((IndRef (mi, i0)), (mk_meta_list ms)))) :: []) in
+            ((m1, app s1 s2), (MLcons' ((Tglob ((IndRef (mi, i0)), (mk_meta_list ms))),
+            (ConstructRef ((mi, i0), x0)), (map (fun p1 -> fst p1) x1))))
+          | None -> assert false (* absurd case *))
+       | _ -> assert false (* absurd case *))
+    | MLcase (ty, a, bs') ->
+      let bs = map (fun (xs,p,e) -> (xs,(p,e))) (Array.to_list bs') in
+      (match ty with
+       | Tglob (r, tys) ->
+         (match r with
+          | IndRef i ->
+            let (mi, k) = i in
+            let p = new_meta_list (length tys) curr_m0 in
+            let (ms, next_m) = p in
+            let s =
+              h a (Tglob ((IndRef (mi, k)), (mk_meta_list ms))) next_m c0 __
+                __ __
+            in
+            let (p0, x0) = s in
+            let (m1, s1) = p0 in
+            let s0 =
+              infer_branch a bs tys mi k bs (subst_mlt s1 mlt0)
+                (subst_env s1 c0) (map (subst_mlt s1) (mk_meta_list ms)) m1
+                (fun y _ -> h y)
+            in
+            let (p1, x1) = s0 in
+            let (m2, s2) = p1 in
+            ((m2, (app s1 s2)), (MLcase' ((Tglob ((IndRef (mi, k)), tys)),
+            x0, Array.of_list (map (fun (xs,(p,e)) -> (xs,p,e)) x1))))
+          | _ -> assert false (* absurd case *))
+       | _ -> assert false (* absurd case *))
+    | MLfix (k, xs', es') ->
+      let xs = Array.to_list xs' in
+      let es = Array.to_list es' in
+      let l = length es in
+      let p = new_meta_list l curr_m0 in
+      let (ms, next_m) = p in
+      let etys = combine es (map mk_meta ms) in
+      let f0 = fun mle0 -> h mle0 in
+      let s = infer_list etys (fun mle0 _ -> f0 mle0) l etys next_m (add_env_all c0 (map mk_meta ms)) in
+      let (p0, x0) = s in
+      let es' = map (fun p1 -> fst p1) x0 in
+      (p0, (MLfix' (k, Array.of_list (combine xs (map mk_meta ms)), Array.of_list es')))
+    | MLexn i -> (((Pervasives.succ curr_m0), []), (MLexn' i))
+    | MLdummy -> (((Pervasives.succ curr_m0), []), MLdummy')
+    | MLaxiom -> (((Pervasives.succ curr_m0), []), MLaxiom')
+    | MLmagic e ->
+      let p = new_meta curr_m0 in
+      let (ta, next_m) = p in
+      let s = h e (mk_meta ta) next_m c0 __ __ __ in
+      let (p0, x0) = s in
+      let (m', s') = p0 in ((m', s'), (MLmagic' (x0, (subst_mlt s' mlt0))))
+    | _ -> assert false)
+  in f mle mlt curr_m c __ __ __
+
+
+(* ---------------------------------------------------------------------------------------- *)
+let rec var'2var = function
+  | Tvar' i -> Tvar i
+  | Tarr (a,b) -> Tarr (var'2var a, var'2var b)
+  | Tglob (r,l) -> Tglob (r, List.map var'2var l)
+  | a -> a
+
+let rec ast_tmap' f = function
+  | MLrel' (x, ts) -> MLrel' (x, List.map f ts)
+  | MLapp' (a, b) -> MLapp' (ast_tmap' f a, List.map (ast_tmap' f) b)
+  | MLlam' (x, t, a) -> MLlam' (x, f t, ast_tmap' f a)
+  | MLglob' (r, ts) -> MLglob' (r, List.map f ts)
+  | MLletin' (x, (i,t), a, b) -> MLletin' (x, (i,f t), ast_tmap' f a, ast_tmap' f b)
+  | MLcons' (t, x, bs) -> MLcons' (f t, x, List.map (ast_tmap' f) bs)
+  | MLtuple' bs -> MLtuple' (List.map (ast_tmap' f) bs)
+  | MLcase' (t, a, bs) -> MLcase' (f t, ast_tmap' f a, Array.map (fun (ids,p,b) -> (ids,p,ast_tmap' f b)) bs)
+  | MLfix' (i, idts, bs) -> MLfix' (i, Array.map (fun (id,t) -> (id, f t)) idts, Array.map (ast_tmap' f) bs)
+  | MLmagic' (a, t) -> MLmagic' (ast_tmap' f a, f t)
+  | t -> t
 
 let infer_ml mlt mle = 
-  let (s, mle') = infer_ml_iter [] (var2var' mlt) mle in
+  let ((_, s), mle') = infer mle (var2var' mlt) 0 [] in
   ast_tmap' (fun ty -> subst_mlt s (var'2var ty)) mle'
 
 (* ---------------------------------------------------------------------------------------- *)
@@ -311,7 +743,7 @@ let keywords =
 
 let preamble _ _ _ = str ""
 
-let prarray_with_sep pp f xs = prlist_with_sep pp f (Array.to_list xs)
+let prarray_with_sep msg f xs = prlist_with_sep msg f (Array.to_list xs)
 let prlist_with_comma f xs = prlist_with_sep (fun () -> str ", ") f xs
 let prlist_with_space f xs = prlist_with_sep (fun () -> str " ") f xs
 
@@ -379,7 +811,7 @@ let rec pp_expr b n (tvs: identifier list) (env: env) (t: ml_ast') : 'a =
       	let fl,a' = collect_lams' a in
         let (ids,tys) = List.split fl in
 	let ids',env' = push_vars (List.map id_of_mlid ids) env in
-        let fl' = List.combine ids' tys in
+        let fl' = combine ids' tys in
         let pp_arg (id,ty) = str "(" ++ pr_id id ++ str ":"
             ++ pp_type tvs ty ++ str ") =>"
         in
@@ -398,6 +830,12 @@ let rec pp_expr b n (tvs: identifier list) (env: env) (t: ml_ast') : 'a =
           else str"[" ++ prlist_with_comma (pp_type tvs) ty_args ++ str "]"
         in
         pp_global Term r ++ type_annot
+    | MLcons' (Tglob (_, ty_args), r, args) ->
+        let type_annot = if ty_args = [] then mt()
+          else str"[" ++ prlist_with_comma (pp_type tvs) ty_args ++ str "]"
+        in
+	pp_global Cons r ++ type_annot ++ str "("
+	  ++ prlist_with_comma (pp_expr false 0 tvs env) args ++ str ")"
     | MLcons' (_, r, args) ->
 	pp_global Cons r ++ str "("
 	  ++ prlist_with_comma (pp_expr false 0 tvs env) args ++ str ")"
@@ -439,7 +877,7 @@ and pp_case n tvs env (ids,p,t) =
     ++ pp_expr true (n+1) tvs env' t
 
 and local_def tvs env (id: identifier) (def: ml_ast') =
-  str "def " ++ pr_id id ++ str " = " ++ pp_expr false 0 tvs env def
+  str "def " ++ pr_id id ++ str " = " ++ pp_expr false 0 tvs env def ++ str ";"
 
 and local_def' n tvs env (id: identifier) i (ty: ml_type) (def: ml_ast') =
   let new_tvars =
@@ -453,7 +891,7 @@ and local_def' n tvs env (id: identifier) i (ty: ml_type) (def: ml_ast') =
     str "[" ++ prlist_with_comma pr_id new_tvars ++ str "]"
   in
   nspaces n ++ str "def " ++ pr_id id ++ pp_tvars ++ str ": " ++ pp_type tvs' ty
-    ++ str " = " ++ pp_expr false (n+1) tvs' env def
+    ++ str " = " ++ pp_expr false (n+1) tvs' env def ++ str ";"
 
 let pp_def glob body typ =
   let ftvs = free_type_vars typ in
